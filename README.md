@@ -3,16 +3,13 @@
 ## Load
 1. `chrome://extensions` → Developer mode → "Load unpacked" → select this folder.
 2. Needs Chrome 121+ with WebGPU enabled (`chrome://flags/#enable-unsafe-webgpu` if not default).
-3. Copy the extension ID shown on the extension card, then run PowerShell from this folder:
-   `powershell -ExecutionPolicy Bypass -File .\setup-native-host.ps1 -ExtensionId YOUR_EXTENSION_ID`
-4. Reload the extension after setup. Python for Windows must be installed and available as `py` or `python`.
+3. Reload the extension after loading it.
 
 ## What it does
 - Every 4s, captures the active tab screenshot.
 - Sends it to an offscreen document running Florence-2-base-ft (`<OD>` task) via transformers.js + WebGPU.
 - Detected object labels appear in a small popup, bottom-right of the page.
-- Sends every completed scan through a Windows Native Messaging host, which writes `detectionsflorence.json` directly to the browser user's Downloads folder without creating Chrome download entries. Run `setup-native-host.ps1 -ExtensionId <your-extension-id>` once after loading the unpacked extension. The bottom-right panel has an ON/OFF button; it is ON by default. Turning it OFF pauses captures and inference while keeping the loaded model available. Entries are grouped by screenshot and include the elapsed time plus each detection's label and bounding-box position.
-- If the native host is unavailable, an error is shown in the status panel, but detection and the bottom-right panel continue working without saving.
+- Saves every completed scan in Chrome extension local storage under `florenceDetectionLog`. Each saved record includes the screenshot number, elapsed seconds, ISO timestamp, labels, and bounding-box positions. Nothing is written to Downloads. The bottom-right panel has an ON/OFF button; it is ON by default. Turning it OFF pauses captures and inference while keeping the loaded model available.
 
 ## Known v1 limitations
 - No PII redaction yet — this is just the detection loop.

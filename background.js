@@ -1,79 +1,37 @@
 // background.js — MV3 service worker
 const OFFSCREEN_URL = "offscreen.html";
 const CAPTURE_INTERVAL_MS = 4000; // tune for latency/resource tradeoff
-const NATIVE_HOST_NAME = "com.florence2.detections";
+const DETECTION_LOG_KEY = "florenceDetectionLog";
 
 let offscreenReady = false;
 let lastStatus = "extension started";
 let modelLoaded = false;
 const optionPorts = new Set();
-let nativePort = null;
-let nativeRequestId = 0;
-const nativeRequests = new Map();
-let nativeSaveQueue = Promise.resolve();
+let detectionSaveQueue = Promise.resolve();
 let detectionEnabled = true;
-let nativeSaveDisabled = false;
-
-function failNativeRequests(error) {
-  for (const { reject } of nativeRequests.values()) reject(error);
-  nativeRequests.clear();
-}
-
-function reportNativeFailure(error) {
-  nativeSaveDisabled = true;
-  setStatus(`ERROR: ${error.message}`);
-}
-
-function connectNativeHost() {
-  if (nativePort) return nativePort;
-  let port;
-  try {
-    port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
-  } catch (error) {
-    throw new Error(`native host connection failed: ${error?.message || error}`);
-  }
-  nativePort = port;
-  port.onMessage.addListener((message) => {
-    const request = nativeRequests.get(message?.requestId);
-    if (!request) return;
-    nativeRequests.delete(message.requestId);
-    if (message.ok) request.resolve(message);
-    else request.reject(new Error(message.error || "native host failed to save detections"));
-  });
-  port.onDisconnect.addListener(() => {
-    const error = new Error(chrome.runtime.lastError?.message || "native host disconnected");
-    nativePort = null;
-    failNativeRequests(error);
-    reportNativeFailure(error);
-  });
-  return port;
-}
-
-function sendToNativeHost(detections) {
-  const requestId = ++nativeRequestId;
-  return new Promise((resolve, reject) => {
-    try {
-      const port = connectNativeHost();
-      nativeRequests.set(requestId, { resolve, reject });
-      port.postMessage({
-        type: "DETECTION",
-        requestId,
-        capturedAt: Date.now(),
-        detections,
-      });
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
 
 function saveDetections(detections) {
-  if (nativeSaveDisabled) return Promise.resolve();
-  // Queue writes so overlapping alarms cannot reorder native-host records.
-  const save = nativeSaveQueue.then(() => sendToNativeHost(detections));
-  nativeSaveQueue = save.catch((error) => {
-    reportNativeFailure(error);
+  // Queue writes so overlapping alarms cannot reuse a screenshot number.
+  const save = detectionSaveQueue.then(async () => {
+    const stored = await chrome.storage.local.get(DETECTION_LOG_KEY);
+    const previous = stored[DETECTION_LOG_KEY] || {};
+    const screenshots = Array.isArray(previous) ? previous : (previous.screenshots || []);
+    const startedAt = Array.isArray(previous)
+      ? (screenshots[0]?.timestampEpochMs || Date.now())
+      : (previous.startedAt || Date.now());
+    const now = Date.now();
+    screenshots.push({
+      screenshot: screenshots.length + 1,
+      timeSeconds: Number(((now - startedAt) / 1000).toFixed(3)),
+      timestamp: new Date(now).toISOString(),
+      timestampEpochMs: now,
+      detections,
+    });
+    await chrome.storage.local.set({
+      [DETECTION_LOG_KEY]: { startedAt, screenshots },
+    });
   });
+  detectionSaveQueue = save.catch(() => {});
   return save;
 }
 
@@ -174,9 +132,9 @@ async function captureAndInfer() {
     try {
       await saveDetections(response.labels || []);
     } catch (error) {
-      // Saving is best-effort. Keep detection and the sidebar working if the
-      // native host is unavailable.
-      reportNativeFailure(error);
+      // Storage is best-effort. Keep detection and the sidebar working if a
+      // storage write fails.
+      console.warn("failed to save detections locally:", error);
     }
     setStatus(`STEP 10/10: detection delivered (${response.labels?.length || 0} objects)`, tab.id);
     chrome.tabs.sendMessage(tab.id, { type: "DETECTIONS", labels: response.labels || [] }).catch(() => {});

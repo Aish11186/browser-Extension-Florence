@@ -1,0 +1,3 @@
+ chrome.storage.local.get("florenceDetectionLog").then(({ florenceDetectionLog }) => {
+    console.log(JSON.stringify(florenceDetectionLog, null, 2));
+  });

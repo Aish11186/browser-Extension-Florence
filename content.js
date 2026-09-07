@@ -1,6 +1,7 @@
 // content.js — injects a small overlay showing detected classes
 (function () {
-  document.getElementById("florence-watcher-popup")?.remove();
+  const existing = document.getElementById("florence-watcher-popup");
+  if (existing) existing.remove();
   const box = document.createElement("div");
   box.id = "florence-watcher-popup";
   Object.assign(box.style, {
@@ -40,7 +41,15 @@
     cursor: "pointer",
   });
   box.append(statusLine, toggle);
-  (document.body || document.documentElement).appendChild(box);
+  function mount() {
+    const parent = document.body || document.documentElement;
+    if (!parent) {
+      setTimeout(mount, 50);
+      return;
+    }
+    parent.appendChild(box);
+  }
+  mount();
   let lastDetectionAt = 0;
 
   function setStatus(status) {
