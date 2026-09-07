@@ -1,14 +1,100 @@
 // background.js — MV3 service worker
 const OFFSCREEN_URL = "offscreen.html";
 const CAPTURE_INTERVAL_MS = 4000; // tune for latency/resource tradeoff
+const NATIVE_HOST_NAME = "com.florence2.sanitisation";
 const DETECTION_LOG_KEY = "florenceDetectionLog";
+const HUMAN_FACE_IMAGE_KEY = "florenceHumanFaceFaceOnlyImages";
+const HUMAN_FACE_IMAGE_FOLDER = "Florence2extensionv1";
+const HUMAN_FACE_COORDINATES_FILE = `${HUMAN_FACE_IMAGE_FOLDER}/coordinates.txt`;
+const MAX_HUMAN_FACE_IMAGES = 5;
 
 let offscreenReady = false;
 let lastStatus = "extension started";
 let modelLoaded = false;
 const optionPorts = new Set();
 let detectionSaveQueue = Promise.resolve();
+let humanFaceExportQueue = Promise.resolve();
 let detectionEnabled = true;
+
+function getDetectionLabel(item) {
+  return typeof item === "string"
+    ? item
+    : (item?.label || item?.class || item?.name || "");
+}
+
+function getHumanFaceBboxes(detections) {
+  return detections.filter((item) => {
+    return String(getDetectionLabel(item)).trim().toLowerCase() === "human face";
+  }).map((item) => item?.bbox).filter((bbox) => Array.isArray(bbox));
+}
+
+async function waitForDownload(downloadId) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const [download] = await chrome.downloads.search({ id: downloadId });
+    if (download?.state === "complete") return;
+    if (download?.state === "interrupted") throw new Error(`download ${downloadId} was interrupted`);
+    await sleep(100);
+  }
+  throw new Error(`download ${downloadId} did not finish in time`);
+}
+
+function downloadData(url, filename) {
+  return new Promise((resolve, reject) => {
+    chrome.downloads.download(
+      { url, filename, saveAs: false, conflictAction: "overwrite" },
+      (downloadId) => {
+        const error = chrome.runtime.lastError;
+        if (error) reject(new Error(error.message));
+        else resolve(downloadId);
+      }
+    );
+  });
+}
+
+async function runSanitisation() {
+  try {
+    const response = await chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, { type: "RUN_SANITISATION" });
+    if (!response?.ok) console.warn("sanitisation.py failed:", response?.error || "unknown error");
+  } catch (error) {
+    console.warn("could not run sanitisation.py:", error?.message || error);
+  }
+}
+
+function exportHumanFaceImage(dataUrl, detections) {
+  const humanFaceBboxes = getHumanFaceBboxes(detections);
+  if (humanFaceBboxes.length === 0) return Promise.resolve();
+  const exportJob = humanFaceExportQueue.then(async () => {
+    // Session storage resets for a new extension run but survives service-worker
+    // suspension, so each run can export its own first two images.
+    const stored = await chrome.storage.session.get(HUMAN_FACE_IMAGE_KEY);
+    const exported = Array.isArray(stored[HUMAN_FACE_IMAGE_KEY])
+      ? stored[HUMAN_FACE_IMAGE_KEY]
+      : [];
+    if (exported.length >= MAX_HUMAN_FACE_IMAGES) return;
+
+    const imageNumber = exported.length + 1;
+    const imageDownloadId = await downloadData(dataUrl, `${HUMAN_FACE_IMAGE_FOLDER}/images/${imageNumber}.png`);
+    const nextExport = [...exported, {
+      image: imageNumber,
+      humanFaceBboxes,
+      timestamp: new Date().toISOString(),
+    }];
+    const coordinates = nextExport.map((record) => [
+      `Image ${record.image}`,
+      ...record.humanFaceBboxes.map((bbox, index) => `bbox ${index + 1}: [${bbox.join(", ")}]`),
+      "",
+    ].join("\n")).join("\n");
+    const coordinatesUrl = `data:text/plain;charset=utf-8,${encodeURIComponent(coordinates)}`;
+    const coordinatesDownloadId = await downloadData(coordinatesUrl, HUMAN_FACE_COORDINATES_FILE);
+    await Promise.all([waitForDownload(imageDownloadId), waitForDownload(coordinatesDownloadId)]);
+    await chrome.storage.session.set({ [HUMAN_FACE_IMAGE_KEY]: nextExport });
+    await runSanitisation();
+  });
+  humanFaceExportQueue = exportJob.catch((error) => {
+    console.warn("failed to export human-face detection:", error);
+  });
+  return exportJob;
+}
 
 function saveDetections(detections) {
   // Queue writes so overlapping alarms cannot reuse a screenshot number.
@@ -20,13 +106,14 @@ function saveDetections(detections) {
       ? (screenshots[0]?.timestampEpochMs || Date.now())
       : (previous.startedAt || Date.now());
     const now = Date.now();
-    screenshots.push({
+    const entry = {
       screenshot: screenshots.length + 1,
       timeSeconds: Number(((now - startedAt) / 1000).toFixed(3)),
       timestamp: new Date(now).toISOString(),
       timestampEpochMs: now,
       detections,
-    });
+    };
+    screenshots.push(entry);
     await chrome.storage.local.set({
       [DETECTION_LOG_KEY]: { startedAt, screenshots },
     });
@@ -121,8 +208,7 @@ async function captureAndInfer() {
     // Pass the window id explicitly; the <all_urls> host permission covers
     // ordinary web pages for automatic captures.
     const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-      format: "jpeg",
-      quality: 70,
+      format: "png",
     });
     setStatus("STEP 6/10: screenshot captured; sending to Florence-2", tab.id);
     await ensureOffscreen();
@@ -136,6 +222,7 @@ async function captureAndInfer() {
       // storage write fails.
       console.warn("failed to save detections locally:", error);
     }
+    exportHumanFaceImage(dataUrl, response.labels || []);
     setStatus(`STEP 10/10: detection delivered (${response.labels?.length || 0} objects)`, tab.id);
     chrome.tabs.sendMessage(tab.id, { type: "DETECTIONS", labels: response.labels || [] }).catch(() => {});
   } catch (e) {

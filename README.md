@@ -4,12 +4,15 @@
 1. `chrome://extensions` → Developer mode → "Load unpacked" → select this folder.
 2. Needs Chrome 121+ with WebGPU enabled (`chrome://flags/#enable-unsafe-webgpu` if not default).
 3. Reload the extension after loading it.
+4. To run `sanitisation.py` automatically, copy the extension ID and run:
+   `powershell -ExecutionPolicy Bypass -File .\setup-sanitisation-host.ps1 -ExtensionId YOUR_EXTENSION_ID`
 
 ## What it does
 - Every 4s, captures the active tab screenshot.
 - Sends it to an offscreen document running Florence-2-base-ft (`<OD>` task) via transformers.js + WebGPU.
 - Detected object labels appear in a small popup, bottom-right of the page.
 - Saves every completed scan in Chrome extension local storage under `florenceDetectionLog`. Each saved record includes the screenshot number, elapsed seconds, ISO timestamp, labels, and bounding-box positions. Nothing is written to Downloads. The bottom-right panel has an ON/OFF button; it is ON by default. Turning it OFF pauses captures and inference while keeping the loaded model available.
+- Additionally saves the first five screenshots containing the exact label `human face` as `images\1.png` through `images\5.png` in this project folder. Coordinates for every detection in each saved screenshot are written in clearly separated `Image N` blocks in `coordinates.txt`. After each image and coordinate update completes, the local Native Messaging helper runs `sanitisation.py`, which writes sanitized images to `sanitized\N.png`.
 
 ## Known v1 limitations
 - No PII redaction yet — this is just the detection loop.

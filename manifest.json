@@ -3,7 +3,7 @@
   "name": "Florence-2 Screen Watcher",
   "version": "0.1.0",
   "description": "Local WebGPU Florence-2 detection popup",
-  "permissions": ["tabs", "activeTab", "scripting", "offscreen", "alarms", "storage"],
+  "permissions": ["tabs", "activeTab", "scripting", "offscreen", "alarms", "storage", "downloads", "nativeMessaging"],
   "host_permissions": ["<all_urls>"],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
