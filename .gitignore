@@ -1,0 +1,47 @@
+# Node / build tooling
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Build output
+dist/
+build/
+out/
+*.zip
+*.crx
+*.pem
+
+# Transformers.js / ONNX model cache (downloaded on first run)
+.cache/
+models/
+*.onnx
+*.onnx_data
+
+# Chrome extension runtime artifacts (created when the extension is loaded)
+# These live outside the repo but are listed defensively.
+.metadata/
+
+
+lib/
