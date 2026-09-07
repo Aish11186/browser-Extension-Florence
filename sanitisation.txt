@@ -1,0 +1,11 @@
+ctx.drawImage(originalScreenshot, 0, 0);
+
+for (const detection of detections) {
+    const [x1, y1, x2, y2] = detection.bbox;
+
+    ctx.fillStyle = "black";
+    ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+}
+
+
+const sanitizedImage = canvas.toDataURL("image/png");

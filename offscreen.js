@@ -56,6 +56,24 @@ function loadModel() {
   return initPromise;
 }
 
+function sortDetectionsTopToBottom(detections) {
+  return detections
+    .map((detection, index) => ({ detection, index }))
+    .sort((a, b) => {
+      const aBox = a.detection.bbox || [];
+      const bBox = b.detection.bbox || [];
+      // Florence returns [x1, y1, x2, y2]. The top edge is the screen
+      // position that determines vertical reading order.
+      const topDifference = (Number(aBox[1]) || 0) - (Number(bBox[1]) || 0);
+      if (topDifference !== 0) return topDifference;
+      const leftDifference = (Number(aBox[0]) || 0) - (Number(bBox[0]) || 0);
+      if (leftDifference !== 0) return leftDifference;
+      // Keep the model's order for otherwise identical or incomplete boxes.
+      return a.index - b.index;
+    })
+    .map(({ detection }) => detection);
+}
+
 async function runInference(dataUrl) {
   sendStatus("STEP 7/10: inference received; waiting for model readiness");
   await loadModel();
@@ -82,7 +100,9 @@ async function runInference(dataUrl) {
   const labels = result?.[TASK]?.labels ?? [];
   const bboxes = result?.[TASK]?.bboxes ?? [];
   sendStatus(`STEP 9/10: detection parsed (${labels.length} objects)`);
-  return labels.map((l, i) => ({ label: l, bbox: bboxes[i] }));
+  return sortDetectionsTopToBottom(
+    labels.map((l, i) => ({ label: l, bbox: bboxes[i] }))
+  );
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -93,7 +113,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === "PING") {
-    sendResponse({ ready: true });
+    sendResponse({ ready: true, modelLoaded: ready });
     return;
   }
   if (msg.type !== "INFER") return;

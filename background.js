@@ -1,11 +1,81 @@
 // background.js — MV3 service worker
 const OFFSCREEN_URL = "offscreen.html";
 const CAPTURE_INTERVAL_MS = 4000; // tune for latency/resource tradeoff
+const NATIVE_HOST_NAME = "com.florence2.detections";
 
 let offscreenReady = false;
 let lastStatus = "extension started";
 let modelLoaded = false;
 const optionPorts = new Set();
+let nativePort = null;
+let nativeRequestId = 0;
+const nativeRequests = new Map();
+let nativeSaveQueue = Promise.resolve();
+let detectionEnabled = true;
+let nativeSaveDisabled = false;
+
+function failNativeRequests(error) {
+  for (const { reject } of nativeRequests.values()) reject(error);
+  nativeRequests.clear();
+}
+
+function reportNativeFailure(error) {
+  nativeSaveDisabled = true;
+  setStatus(`ERROR: ${error.message}`);
+}
+
+function connectNativeHost() {
+  if (nativePort) return nativePort;
+  let port;
+  try {
+    port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+  } catch (error) {
+    throw new Error(`native host connection failed: ${error?.message || error}`);
+  }
+  nativePort = port;
+  port.onMessage.addListener((message) => {
+    const request = nativeRequests.get(message?.requestId);
+    if (!request) return;
+    nativeRequests.delete(message.requestId);
+    if (message.ok) request.resolve(message);
+    else request.reject(new Error(message.error || "native host failed to save detections"));
+  });
+  port.onDisconnect.addListener(() => {
+    const error = new Error(chrome.runtime.lastError?.message || "native host disconnected");
+    nativePort = null;
+    failNativeRequests(error);
+    reportNativeFailure(error);
+  });
+  return port;
+}
+
+function sendToNativeHost(detections) {
+  const requestId = ++nativeRequestId;
+  return new Promise((resolve, reject) => {
+    try {
+      const port = connectNativeHost();
+      nativeRequests.set(requestId, { resolve, reject });
+      port.postMessage({
+        type: "DETECTION",
+        requestId,
+        capturedAt: Date.now(),
+        detections,
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+function saveDetections(detections) {
+  if (nativeSaveDisabled) return Promise.resolve();
+  // Queue writes so overlapping alarms cannot reorder native-host records.
+  const save = nativeSaveQueue.then(() => sendToNativeHost(detections));
+  nativeSaveQueue = save.catch((error) => {
+    reportNativeFailure(error);
+  });
+  return save;
+}
 
 function setStatus(status, tabId) {
   lastStatus = status;
@@ -71,9 +141,15 @@ async function sendToOffscreen(message) {
 
 async function captureAndInfer() {
   try {
+    if (!detectionEnabled) return;
     if (!modelLoaded) {
-      setStatus("WAITING FOR MODEL: open Options and click Load Florence-2");
-      return;
+      await ensureOffscreen();
+      const probe = await sendToOffscreen({ type: "PING" });
+      if (!probe.response?.modelLoaded) {
+        setStatus("WAITING FOR MODEL: open Options and click Load Florence-2");
+        return;
+      }
+      modelLoaded = true;
     }
     setStatus("STEP 1/10: selecting active tab");
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -94,6 +170,14 @@ async function captureAndInfer() {
     await ensureOffscreen();
 
     const response = await requestInference(dataUrl, tab.id);
+    if (!detectionEnabled) return;
+    try {
+      await saveDetections(response.labels || []);
+    } catch (error) {
+      // Saving is best-effort. Keep detection and the sidebar working if the
+      // native host is unavailable.
+      reportNativeFailure(error);
+    }
     setStatus(`STEP 10/10: detection delivered (${response.labels?.length || 0} objects)`, tab.id);
     chrome.tabs.sendMessage(tab.id, { type: "DETECTIONS", labels: response.labels || [] }).catch(() => {});
   } catch (e) {
@@ -103,6 +187,10 @@ async function captureAndInfer() {
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === "TOGGLE_DETECTION") {
+    detectionEnabled = msg.enabled === true;
+    return Promise.resolve({ enabled: detectionEnabled });
+  }
   if (msg.type === "GET_STATUS") return Promise.resolve({ status: lastStatus });
   if (msg.type === "MODEL_STATUS") {
     if (msg.status === "STEP 9/10: model, processor, and tokenizer ready") modelLoaded = true;
@@ -142,7 +230,9 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create("tick", { periodInMinutes: CAPTURE_INTERVAL_MS / 60000 });
   chrome.runtime.openOptionsPage();
 });
-chrome.alarms.onAlarm.addListener((a) => { if (a.name === "tick") captureAndInfer(); });
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === "tick" && detectionEnabled) captureAndInfer();
+});
 
 // Also run once on startup for immediate feedback. Keep the rejection visible
 // in the service-worker inspector; otherwise the page overlay stays on
