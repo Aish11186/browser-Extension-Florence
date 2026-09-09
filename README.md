@@ -8,7 +8,7 @@
    `powershell -ExecutionPolicy Bypass -File .\setup-sanitisation-host.ps1 -ExtensionId YOUR_EXTENSION_ID`
 
 ## What it does
-- Every 4s, captures the active tab screenshot.
+- Every 4s, captures the active tab screenshot. Or when siginificant DOM changes occur.
 - Sends it to an offscreen document running Florence-2-base-ft (`<OD>` task) via transformers.js + WebGPU.
 - Detected object labels appear in a small popup, bottom-right of the page.
 - Saves every completed scan in Chrome extension local storage under `florenceDetectionLog`. Each saved record includes the screenshot number, elapsed seconds, ISO timestamp, labels, and bounding-box positions. Nothing is written to Downloads. The bottom-right panel has an ON/OFF button; it is ON by default. Turning it OFF pauses captures and inference while keeping the loaded model available.
